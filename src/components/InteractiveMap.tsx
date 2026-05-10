@@ -1,42 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from 'react';
-import Map, { NavigationControl, ScaleControl, Source, Layer, LayerProps, MapRef } from 'react-map-gl/maplibre';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import Map, { NavigationControl, ScaleControl, Source, Layer, LayerProps, MapRef, Popup } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { BASEMAPS } from './Sidebar';
-
-// POI Mock Data Generators (representing backend data for Bank, ATM, School, etc.)
-const generatePOIs = (count: number, type: string) => ({
-  type: 'FeatureCollection',
-  features: Array.from({ length: count }).map((_, i) => ({
-    type: 'Feature',
-    geometry: { type: 'Point', coordinates: [79.0 + Math.random() * 4, 25.0 + Math.random() * 4] },
-    properties: { id: i, type, name: `${type} ${i}` }
-  }))
-});
-
-const mockPOIs = {
-  'bank-branch': generatePOIs(150, 'Bank Branch'),
-  'bank-mitra': generatePOIs(300, 'Bank Mitra'),
-  'atm': generatePOIs(200, 'ATM'),
-  'school': generatePOIs(400, 'School'),
-  'csc': generatePOIs(100, 'CSC'),
-  'health-center': generatePOIs(120, 'Health Center'),
-  'pds': generatePOIs(250, 'PDS')
-};
-
-// Accurate Admin Boundary (Simplified)
-const upBoundary = {
-  type: 'FeatureCollection',
-  features: [{
-    type: 'Feature',
-    geometry: {
-      type: 'Polygon',
-      coordinates: [[[77.0, 27.0], [78.0, 30.0], [80.0, 29.0], [84.0, 27.5], [84.5, 25.5], [83.0, 24.0], [81.0, 24.5], [78.5, 24.0], [77.0, 27.0]]]
-    },
-    properties: { name: 'उत्तर प्रदेश (Uttar Pradesh)' }
-  }]
-};
 
 export default function InteractiveMap() {
   const mapRef = useRef<MapRef>(null);
@@ -55,6 +22,7 @@ export default function InteractiveMap() {
 
   const [activeBasemapId, setActiveBasemapId] = useState('esri-street');
   const [weatherTime, setWeatherTime] = useState<number | null>(null);
+  const [hoverInfo, setHoverInfo] = useState<{x: number, y: number, feature: any} | null>(null);
 
   useEffect(() => {
     if (activeLayers.radar && !weatherTime) {
@@ -95,21 +63,11 @@ export default function InteractiveMap() {
     };
   }, []);
 
-  // Construct Map Style JSON based on selected basemap
   const mapStyle = useMemo(() => {
     if (activeBasemapId === 'no-basemap') {
       return { version: 8, sources: {}, layers: [{ id: 'background', type: 'background', paint: { 'background-color': '#f3f4f6' } }] };
     }
-    
     const basemapUrl = BASEMAPS.find(b => b.id === activeBasemapId)?.url;
-    
-    // Some are standard Mapbox Styles
-    if (activeBasemapId === 'nic-street-lite' || activeBasemapId === 'nic-base' || activeBasemapId === 'nic-street') {
-        // We fallback to carto for these names as actual NIC URLs are private
-        // If it's a direct style.json link, we can return the URL, but carto URLs are raster tiles.
-    }
-
-    // Default: Raster Tile Style
     return {
       version: 8,
       sources: {
@@ -119,25 +77,31 @@ export default function InteractiveMap() {
           tileSize: 256
         }
       },
-      layers: [
-        {
-          id: 'basemap-layer',
-          type: 'raster',
-          source: 'basemap-raster',
-          minzoom: 0,
-          maxzoom: 22
-        }
-      ]
+      layers: [{ id: 'basemap-layer', type: 'raster', source: 'basemap-raster', minzoom: 0, maxzoom: 22 }]
     };
   }, [activeBasemapId]);
 
-  // Layer Paint Properties
   const getPoiPaint = (color: string) => ({
-    'circle-radius': 5,
+    'circle-radius': 6,
     'circle-color': color,
-    'circle-stroke-width': 1.5,
+    'circle-stroke-width': 2,
     'circle-stroke-color': '#ffffff'
   });
+
+  const onHover = useCallback((event: any) => {
+    const { features, point } = event;
+    const hoveredFeature = features && features[0];
+    if (hoveredFeature) {
+      setHoverInfo({ x: point.x, y: point.y, feature: hoveredFeature });
+    } else {
+      setHoverInfo(null);
+    }
+  }, []);
+
+  const interactiveLayerIds = [
+    'layer-bank-branch', 'layer-bank-mitra', 'layer-atm', 
+    'layer-school', 'layer-csc', 'layer-health-center', 'layer-pds'
+  ];
 
   return (
     <div className="w-full h-full relative font-sans">
@@ -149,50 +113,54 @@ export default function InteractiveMap() {
         style={{ width: '100%', height: '100%' }}
         minZoom={5}
         maxPitch={60}
+        interactiveLayerIds={interactiveLayerIds}
+        onMouseMove={onHover}
+        onMouseLeave={() => setHoverInfo(null)}
       >
         <NavigationControl position="bottom-right" visualizePitch={true} />
         <ScaleControl />
 
+        {/* Real Admin Boundaries from accurate GeoJSON file */}
         {activeLayers.admin && (
-          <Source id="up-data" type="geojson" data={upBoundary as any}>
-            <Layer id="up-fill" type="fill" paint={{ 'fill-color': '#4f46e5', 'fill-opacity': 0.05 }} />
-            <Layer id="up-line" type="line" paint={{ 'line-color': '#1e1b4b', 'line-width': 2, 'line-dasharray': [4, 2] }} />
+          <Source id="up-data" type="geojson" data="/data/up_districts.geojson">
+            <Layer id="up-fill" type="fill" paint={{ 'fill-color': '#4f46e5', 'fill-opacity': 0.1 }} />
+            <Layer id="up-line" type="line" paint={{ 'line-color': '#1e1b4b', 'line-width': 1.5 }} />
           </Source>
         )}
 
-        {/* POI Layers */}
+        {/* Authentic Dynamic POI Layers fetching from Real-Time OSM */}
         {activeLayers['bank-branch'] && (
-          <Source id="bank-branch" type="geojson" data={mockPOIs['bank-branch'] as any}>
+          <Source id="bank-branch" type="geojson" data="/api/gis?layer=bank-branch">
             <Layer id="layer-bank-branch" type="circle" paint={getPoiPaint('#16a34a')} />
           </Source>
         )}
         {activeLayers['bank-mitra'] && (
-          <Source id="bank-mitra" type="geojson" data={mockPOIs['bank-mitra'] as any}>
+          <Source id="bank-mitra" type="geojson" data="/api/gis?layer=bank-mitra">
             <Layer id="layer-bank-mitra" type="circle" paint={getPoiPaint('#059669')} />
           </Source>
         )}
         {activeLayers['atm'] && (
-          <Source id="atm" type="geojson" data={mockPOIs['atm'] as any}>
+          <Source id="atm" type="geojson" data="/api/gis?layer=atm">
             <Layer id="layer-atm" type="circle" paint={getPoiPaint('#d97706')} />
           </Source>
         )}
         {activeLayers['school'] && (
-          <Source id="school" type="geojson" data={mockPOIs['school'] as any}>
+          <Source id="school" type="geojson" data="/api/gis?layer=school">
             <Layer id="layer-school" type="circle" paint={getPoiPaint('#2563eb')} />
           </Source>
         )}
         {activeLayers['csc'] && (
-          <Source id="csc" type="geojson" data={mockPOIs['csc'] as any}>
+          <Source id="csc" type="geojson" data="/api/gis?layer=csc">
             <Layer id="layer-csc" type="circle" paint={getPoiPaint('#7c3aed')} />
           </Source>
         )}
         {activeLayers['health-center'] && (
-          <Source id="health-center" type="geojson" data={mockPOIs['health-center'] as any}>
+          <Source id="health-center" type="geojson" data="/api/gis?layer=health-center">
             <Layer id="layer-health-center" type="circle" paint={getPoiPaint('#e11d48')} />
           </Source>
         )}
         {activeLayers['pds'] && (
-          <Source id="pds" type="geojson" data={mockPOIs['pds'] as any}>
+          <Source id="pds" type="geojson" data="/api/gis?layer=pds">
             <Layer id="layer-pds" type="circle" paint={getPoiPaint('#ea580c')} />
           </Source>
         )}
@@ -202,6 +170,12 @@ export default function InteractiveMap() {
           <Source id="radar-data" type="raster" tiles={[`https://tilecache.rainviewer.com/v2/radar/${weatherTime}/256/{z}/{x}/{y}/2/1_1.png`]} tileSize={256}>
             <Layer id="layer-radar" type="raster" paint={{ 'raster-opacity': 0.6 }} />
           </Source>
+        )}
+
+        {hoverInfo && (
+          <div className="absolute bg-white text-gray-800 px-3 py-2 rounded-lg shadow-xl text-xs font-semibold border border-gray-100 pointer-events-none transform -translate-x-1/2 -translate-y-[120%]" style={{ left: hoverInfo.x, top: hoverInfo.y }}>
+            {hoverInfo.feature.properties.name || hoverInfo.feature.properties.type}
+          </div>
         )}
         
         {/* Advanced Data Indicator HUD */}

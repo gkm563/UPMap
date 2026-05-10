@@ -4,29 +4,44 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const layer = searchParams.get('layer');
 
-  if (layer === 'traffic-incidents') {
-    // Fetch live construction and road blockages from OpenStreetMap (Overpass API)
-    // Bounding box for UP approx: 23.8,77.0,30.4,84.5
-    const overpassQuery = `
-      [out:json];
-      node(23.8,77.0,30.4,84.5)["highway"="construction"];
-      out 100;
-    `;
-    
+  const getOverpassQuery = (layer: string) => {
+    // UP Bounding Box
+    const bbox = "23.8,77.0,30.4,84.5";
+    let query = "";
+    switch(layer) {
+      case 'traffic-incidents': query = `node(${bbox})["highway"="construction"];`; break;
+      case 'bank-branch': query = `node(${bbox})["amenity"="bank"];`; break;
+      case 'atm': query = `node(${bbox})["amenity"="atm"];`; break;
+      case 'school': query = `node(${bbox})["amenity"="school"];`; break;
+      case 'health-center': query = `node(${bbox})["amenity"~"hospital|clinic"];`; break;
+      case 'csc': query = `node(${bbox})["office"="government"];`; break;
+      case 'bank-mitra': query = `node(${bbox})["amenity"="post_office"];`; break;
+      case 'pds': query = `node(${bbox})["shop"="convenience"];`; break;
+      default: return null;
+    }
+    return `[out:json][timeout:25];${query}out 500;`;
+  };
+
+  const query = getOverpassQuery(layer || '');
+
+  if (query) {
     try {
       const response = await fetch('https://overpass-api.de/api/interpreter', {
         method: 'POST',
-        body: overpassQuery,
+        body: query,
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        next: { revalidate: 300 } // Cache for 5 mins
+        next: { revalidate: 3600 } // Cache for 1 hour to prevent Overpass blocking
       });
       
+      if (!response.ok) {
+         throw new Error("Overpass API failed");
+      }
+
       const data = await response.json();
       
-      // Convert to GeoJSON
       const geojson = {
         type: 'FeatureCollection',
-        features: data.elements.map((el: any) => ({
+        features: (data.elements || []).map((el: any) => ({
           type: 'Feature',
           geometry: {
             type: 'Point',
@@ -34,15 +49,16 @@ export async function GET(request: Request) {
           },
           properties: {
             id: el.id,
-            type: 'Road Construction / Blockage',
-            description: el.tags?.description || 'Ongoing road work affecting traffic',
+            type: layer,
+            name: el.tags?.name || el.tags?.operator || `Unnamed ${layer}`,
+            ...el.tags
           }
         }))
       };
       
       return NextResponse.json(geojson);
     } catch (e) {
-      console.error(e);
+      console.error("GIS API Error:", e);
       return NextResponse.json({ type: 'FeatureCollection', features: [] });
     }
   }
